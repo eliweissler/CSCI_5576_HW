@@ -39,9 +39,9 @@ def grad_descent(X: np.array, Y: np.array,
     """
     loss = np.zeros(epochs)
 
-    # Initialize random weights between 0 - 1
-    # And zero bias
-    W = np.random.random(size=X.shape).T
+    # Initialize weights as all ones
+    # with zero bias
+    W = np.ones(size=X.shape).T
     b = 0
 
     for i in range(epochs):
@@ -103,7 +103,7 @@ def normalize_data(data: pd.DataFrame, label_col: str = "LABEL"):
 
 def logistic_reg(data_file: str, epochs: int, lr: float,
                  label_col: str = "LABEL",
-                 err_plot = "error.png", conf_mat = "conf_mat.png"):
+                 err_plot: str = "error.png", conf_mat: str = "conf_mat.png"):
     """
     Performs a logistic regression using gradient descent
 
@@ -124,9 +124,9 @@ def logistic_reg(data_file: str, epochs: int, lr: float,
     # Do the gradient descent
     (W, b), loss = grad_descent(X, Y, loss_LCE, grad_LCE_log_reg, pred_sigmoid,
                                 epochs=epochs, lr=lr)
-    
+
     # Make plots
-    
+
     # Error
     f = plt.figure()
     plt.savefig(err_plot)

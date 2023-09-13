@@ -93,7 +93,7 @@ def grad_descent(X: np.array, Y: np.array,
         pred_fn (function): function that takes in (X, W, b) -> np.array
                             that is the predicted labels.
         epochs (int): number of epochs
-        lr (float): learning rate (W_{i+1} = W_{i} + lr*grad)
+        lr (float): learning rate (W_{i+1} = W_{i} - lr*grad)
 
     Returns:
         W, b, pred, loss

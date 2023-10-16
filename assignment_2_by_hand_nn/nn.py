@@ -263,9 +263,8 @@ class NeuralNetwork:
             if n % check_progress == 0:
                 print(f"Epoch {n} (out of {epochs}) -- Loss: {np.round(loss[n], 4)}")
 
-
         return loss
-    
+
     def feed_forward(self, X: np.array):
         """
         Feeds forward an input through the network. 
@@ -286,7 +285,7 @@ class NeuralNetwork:
             prev_layer = self.activ_fns[i](self.layers[i])
 
         return prev_layer
-    
+
     def back_propagate(self, X: np.array, Y: np.array, pred: np.array, lr: float):
         """
         Updates weights and biases using backpropagation

@@ -43,7 +43,7 @@ def loss_CCE(Y: np.array, pred: np.array, deriv: bool = False):
         loss function value (float)
     """
     # Epsilon value to avoid divide by 0 or log of 0
-    eps = 1e-04
+    eps = 1e-10
     pred_clipped = pred.copy()
     pred_clipped[pred_clipped < eps] = eps
     if deriv:
@@ -313,7 +313,7 @@ class NeuralNetwork:
             # Input Layer
             else:
                 self.weights[n] += -lr*np.mean([np.outer(xi, dL_dzn) for xi in X], axis=0)
-            self.biases[n] += -lr*np.mean(dL_dzn)
+            self.biases[n] += -lr*dL_dzn
         
         return
 
@@ -396,11 +396,15 @@ def plot_confusion_matrix(Y: np.array, pred: np.array, labels=[], savename=""):
         confusion matrix
     """
     # Figure out predicted class -- infer from Y and pred the number of classes
-    Y_labels = np.zeros(Y.shape[0], dtype=int)
-    pred_labels = np.zeros_like(Y_labels)
-    for i in range(Y.shape[0]):
-        Y_labels[i] = np.argmax(Y[i])
-        pred_labels[i] = np.argmax(pred[i])
+    if Y.shape[1] > 1:
+        Y_labels = np.zeros(Y.shape[0], dtype=int)
+        pred_labels = np.zeros_like(Y_labels)
+        for i in range(Y.shape[0]):
+            Y_labels[i] = np.argmax(Y[i])
+            pred_labels[i] = np.argmax(pred[i])
+    else:
+        Y_labels = Y
+        pred_labels = (Y >= 0.5).astype(int)
     cm = confusion_matrix(Y_labels, pred_labels)
     f, ax = plt.subplots()
     sns.heatmap(cm, annot=True, fmt='g', ax=ax, cmap='Blues')
@@ -408,12 +412,11 @@ def plot_confusion_matrix(Y: np.array, pred: np.array, labels=[], savename=""):
     ax.set_xlabel("Predicted labels")
     ax.set_ylabel("True labels")
     ax.set_title("Confusion Matrix")
-    if labels:
-        ax.xaxis.set_ticklabels(labels)
-        ax.yaxis.set_ticklabels(labels)
-    else:
-        ax.xaxis.set_ticklabels(np.arange(Y.shape[1]).astype(str))
-        ax.yaxis.set_ticklabels(np.arange(Y.shape[1]).astype(str))
+    if not labels:
+        labels = np.arange(max(Y.shape[1], 2))
+    ax.xaxis.set_ticklabels(labels)
+    ax.yaxis.set_ticklabels(labels)
+    
     if savename != "":
         plt.savefig(savename)
         plt.close(f)
@@ -441,7 +444,7 @@ def plot_loss(loss: np.array, lr: float, savename="", yscale="linear"):
     ax.plot(np.arange(len(loss)), loss)
     ax.set_yscale(yscale)
     ax.set_xlabel("Epoch")
-    ax.set_ylabel(r"$L_{MSE}$")
+    ax.set_ylabel("Loss")
     ax.set_title(f"Loss (LR = {lr})")
     if savename != "":
         plt.savefig(savename)
@@ -508,9 +511,9 @@ if __name__ == "__main__":
                         activation_fns, loss_fn, random_initialize=random_initialize)
     
     # Train network
-    epochs = 10000
-    lr = 0.1
-    batch_size = 8
+    epochs = 1000
+    lr = 1
+    batch_size = 9
     loss = network.train(X, Y, X, Y, epochs=epochs, lr=lr, batch_size=batch_size, check_progress=1000)
 
     # Predict and plot

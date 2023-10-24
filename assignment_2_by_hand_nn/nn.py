@@ -173,13 +173,19 @@ class NeuralNetwork:
         # Initialize Blank Jacobians and gradients with respect to loss
         self.J = []
         self.dLdz = []
+        self.dLdw = []
+        self.dLdb = []
         for n in range(self.n_hidden_layers + 1):
             if n == self.n_hidden_layers:
                 self.J.append(np.zeros((output_size, output_size)))
                 self.dLdz.append(np.zeros((1, output_size)))
+                self.dLdw.append([])
+                self.dLdb.append([])
             else:
                 self.J.append(np.zeros((output_size, hidden_layer_sizes[n])))
                 self.dLdz.append(np.zeros((1, hidden_layer_sizes[n])))
+                self.dLdw.append([])
+                self.dLdb.append([])
     
     def calc_jacobian(self):
         """
@@ -308,11 +314,15 @@ class NeuralNetwork:
             if n > 0:
                 H = self.activ_fns[n-1](self.layers[n-1])
                 # breakpoint()
-                self.weights[n] += -lr*np.mean([np.outer(hi, dL_dzn) for hi in H], axis=0)
+                self.dLdw[n] = np.mean([np.outer(hi, dL_dzn) for hi in H], axis=0)
+                self.weights[n] += -lr*self.dLdw[n]
             # Input Layer
             else:
-                self.weights[n] += -lr*np.mean([np.outer(xi, dL_dzn) for xi in X], axis=0)
-            self.biases[n] += -lr*dL_dzn
+                self.dLdw[n] = np.mean([np.outer(xi, dL_dzn) for xi in X], axis=0)
+                self.weights[n] += -lr*self.dLdw[n]
+            
+            self.dLdb[n] = dL_dzn
+            self.biases[n] += -lr*self.dLdb[n]
         
         return
 

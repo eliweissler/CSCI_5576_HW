@@ -161,7 +161,7 @@ print(confusion_matrix(Max_Values, y_test))
 ## Pretty Confusion Matrix
 #from sklearn.metrics import confusion_matrix
 labels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-cm = confusion_matrix(y_test, Max_Values, labels)
+cm = confusion_matrix(y_test, Max_Values, labels=labels)
 print(cm)
 
 import seaborn as sns
@@ -186,3 +186,5 @@ ax.xaxis.set_ticklabels(["0:T-shirt/top","1:Trouser",
 ax.yaxis.set_ticklabels(["0:T-shirt/top","1:Trouser","2:Pullover",
                          "3:Dress","4:Coat","5:Sandal","6:Shirt",
                          "7:Sneaker","8:Bag","9:Ankle boot"],rotation=0, fontsize = 18)
+
+plt.show()

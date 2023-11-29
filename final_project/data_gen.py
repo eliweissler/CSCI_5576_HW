@@ -7,20 +7,39 @@ import qutip as qt
 from tqdm import tqdm
 from pathlib import Path
 
-def read_data(hfile: str, dim: int, train_test: str, i_start: int, i_end: int):
+def read_data(hfile: str, dim: int, label: str, i_start: int, i_end: int):
+    """
+    Args:
+        hfile (str): _description_
+        dim (int): _description_
+        label (str): _description_
+        i_start (int): _description_
+        i_end (int): _description_
+
+    Returns:
+        np.array, np.array : entries from the hdf5 file with shape
+                            (n_entries, n_timesteps, dim) -- states
+                            (n_entries, n_timesteps, dim, dim) -- H
+    """
 
     with h5py.File(hfile, "r") as f:
-        data_re = f[f"{dim}_dim/{train_test}_re"][i_start:i_end]
-        data_im = f[f"{dim}_dim/{train_test}_im"][i_start:i_end]
+        state_re = f[f"dim_{dim}/{label}_state_re"][i_start:i_end]
+        state_im = f[f"dim_{dim}/{label}_state_im"][i_start:i_end]
+        H_re = f[f"dim_{dim}/{label}_H_re"][i_start:i_end]
+        H_im = f[f"dim_{dim}/{label}_H_im"][i_start:i_end]
     
-    data = np.zeros_like(data_im, dtype=np.complex128)
-    data += data_re
-    data += 1.0j*data_im
+    states = np.zeros_like(state_re, dtype=np.complex128)
+    states += state_re
+    states += 1.0j*state_im
 
-    return data
+    H = np.zeros_like(H_re, dtype=np.complex128)
+    H += H_re
+    H += 1.0j*H_im
+
+    return states, H
 
 def gen_data(hfile: str, dim: int, n_samples: int, label: str, batchsize: int = 1000,
-             t_end: float = 50, dt: float = 0.5, vary_time: float = 0):
+             t_end: float = 20, dt: float = 0.01, vary_time: float = 0):
     
     # Timesteps to solve for
     tlist = np.arange(0, t_end+dt, dt)

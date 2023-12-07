@@ -60,7 +60,7 @@ def dset_size(hfile: str, dim: int, label: str):
 
 
 def gen_data(hfile: str, dim: int, n_samples: int, label: str, batchsize: int = 50,
-             t_end: float = 10, dt: float = 0.1, vary_time: float = 0):
+             t_end: float = 10, dt: float = 0.01, vary_time: float = 0):
 
     # Timesteps to solve for
     # Choose a random time up to t_end to end the pulse
@@ -226,5 +226,5 @@ def random_func(t: np.array, max_freq: int, envelope_fn=gaussian_envelope):
 if __name__ == "__main__":
 
     hfile = "data.hdf5"
-    gen_data(hfile, 2, 1000, "train", vary_time=1)
-    gen_data(hfile, 2, 100, "test", vary_time=1)
+    gen_data(hfile, 2, 1000, "train", vary_time=1, dt=0.01)
+    gen_data(hfile, 2, 100, "test", vary_time=1, dt=0.01)

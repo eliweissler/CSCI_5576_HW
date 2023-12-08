@@ -105,6 +105,7 @@ class QuantumEnv(EnvBase):
         """Returns a tensordict containing the physical parameters such as timestep and control stuff."""
         if batch_size is None:
             batch_size = []
+        ctype = kwargs.get("complex_type", torch.complex64)
         td = TensorDict(
             {
                 "params": TensorDict(
@@ -115,10 +116,10 @@ class QuantumEnv(EnvBase):
                         "control_penalty": kwargs.get("control_penalty", 20),
                         "control_thresh": kwargs.get("control_thresh", 0.1),
                         "gate_time": kwargs.get("gate_time", 10),
-                        "psi_0": kwargs.get("psi_0", np.array([0, 1]).reshape((2, 1))),
-                        "psi_f": kwargs.get("psi_f", np.array([1, 0]).reshape((2, 1))),
-                        "H0": kwargs.get("H0", np.array([[1,  0], [0, -1]])),
-                        "H1": kwargs.get("H0", np.array([[0,  1], [1, 0]]))
+                        "psi_0": kwargs.get("psi_0", torch.tensor(np.array([0, 1]).reshape((2, 1)), dtype=ctype)),
+                        "psi_f": kwargs.get("psi_f", torch.tensor(np.array([1, 0]).reshape((2, 1)), dtype=ctype)),
+                        "H0": kwargs.get("H0", torch.tensor(np.array([[1,  0], [0, -1]]), dtype=ctype)),
+                        "H1": kwargs.get("H0", torch.tensor(np.array([[0,  1], [1, 0]]), dtype=ctype))
                     },
                     [],
                 )
@@ -138,13 +139,13 @@ class QuantumEnv(EnvBase):
             psi_real=BoundedTensorSpec(
                 low=-1,
                 high=1,
-                shape=[2,1],
+                shape=td_params["params", "psi_0"].shape,
                 device=device,
                 dtype=torch.float32),
             psi_imag=BoundedTensorSpec(
                 low=-1,
                 high=1,
-                shape=[2,1],
+                shape=td_params["params", "psi_0"].shape,
                 device=device,
                 dtype=torch.float32),
             # we need to add the "params" to the observation specs, as we want
@@ -172,25 +173,17 @@ class QuantumEnv(EnvBase):
     # Reset function resets a run to the original starting state
     def _reset(self, tensordict):
 
-        # print("-----------------------")
-        # print("in reset")
-
-        psi_real = torch.real(PSI_0_tensor)
-        psi_imag = torch.imag(PSI_0_tensor)
 
         if tensordict is None or tensordict.is_empty():
             # if no tensordict is passed, we generate a single set of hyperparameters
             # Otherwise, we assume that the input tensordict contains all the relevant
             # parameters to get started.
             tensordict = self.gen_params(batch_size=self.batch_size)
-        else:
-            psi_real = psi_real.repeat(tensordict.size(dim=0), 1, 1)
-            psi_imag = psi_imag.repeat(tensordict.size(dim=0), 1, 1)
-
-
-        # print("batch_dims", self.batch_dims)
-            
-        # print("psi_real - ", self.batch_dims, psi_real.shape)
+        # else:
+        #     psi_real = psi_real.repeat(tensordict.size(dim=0), 1, 1)
+        #     psi_imag = psi_imag.repeat(tensordict.size(dim=0), 1, 1)
+        psi_real = torch.real(tensordict["params", "psi_0"])
+        psi_imag = torch.imag(tensordict["params", "psi_0"])
 
         out = TensorDict(
             {
@@ -208,17 +201,17 @@ class QuantumEnv(EnvBase):
     @staticmethod
     def _step(tensordict):
 
-        # print("------------------")
-        # print("in step")
 
         # Current quantum state and control value
         psi_real, psi_imag, control = tensordict["psi_real"], tensordict["psi_imag"], tensordict["action"].squeeze(-1)
-        # print("psi_re", psi_real)
-        # print("psi_im", psi_imag)
-        # print("control", control)
         psi = psi_real + 1.0j*psi_imag
 
-        # Timestep
+        # Target final states and Hamiltonians
+        psi_f = tensordict["params", "psi_f"]
+        H0 = tensordict["params", "H0"]
+        H1 = tensordict["params", "H1"]
+
+        # Timestep and other parameters
         dt = tensordict["params", "dt"]
         # step = tensordict["params", "step"]
         # t = dt*step
@@ -230,42 +223,26 @@ class QuantumEnv(EnvBase):
         # print("psi", psi)
         # print("PSI_F_tensor", PSI_F_tensor)
         # costs = 1 - torch.pow(torch.abs(torch.transpose(torch.conj_physical(PSI_F_tensor), 0, 1)@psi), 2)
-        F = torch.pow(torch.abs(torch.transpose(torch.conj_physical(PSI_F_tensor), 0, 1)@psi), 2).squeeze()
+        bra_ket = torch.transpose(torch.conj_physical(psi_f), 0, 1)@psi
+        F = torch.pow(torch.abs(bra_ket), 2).squeeze()
         # breakpoint()
-        
 
         # If you're super close to the state STOP
         done = F >= tensordict["params", "close_thresh"]
 
         # Add penalty for large control
-        control_term = control_penalty*torch.clamp(torch.pow(control,2) - control_thresh, min=0).squeeze()
+        control_term = control_penalty*torch.clamp(torch.pow(torch.abs(control), 2) - control_thresh, min=0).squeeze()
 
-        # Maybe add some sort of target gate time and give a penalty, terminate past the gate
+        # Maybe add some sort of target gate time and give a penalty,
+        # terminate past the gate
         # Time and be more forgiving for being far away earlier
         # time_term = torch.pow(t, 2)
-
 
         costs = -torch.log(F + eps) + control_term
         reward = -costs.view(*tensordict.shape, 1)
 
         # Propagate along the state
-        # print("H0", H0_tensor)
-        # print("H1", H1_tensor)
-        # print("control.shape", control.shape)
-        # print("tensordict shape", tensordict.shape)
-        if len(control.shape) > 0:
-            H_dim = H1_tensor.size(dim=0)
-            c_dim = control.size(dim=0)
-            control_repeat = control.repeat(1,H_dim**2,1).T.reshape(c_dim, H_dim, H_dim)
-            dt_repeat = dt.repeat(1,H_dim**2,1).T.reshape(c_dim, H_dim, H_dim)
-            H0_repeat = H0_tensor.repeat(c_dim,1,1)
-            H1_repeat = H1_tensor.repeat(c_dim,1,1)
-            # print(control_repeat.shape, H0_repeat.shape, H1_repeat.shape, dt.shape)
-            U = torch.linalg.matrix_exp(-1.0j*dt_repeat*(H0_repeat + control_repeat*H1_repeat))
-        else:
-            U = torch.linalg.matrix_exp(-1.0j*dt*(H0_tensor + control*H1_tensor))
-
-        # print("U", U)
+        U = torch.linalg.matrix_exp(-1.0j*dt*(H0 + control*H1))
         new_psi = U@psi
 
         # Set done if you're under a threshold of closeness -- 99.9%
@@ -288,8 +265,6 @@ class QuantumEnv(EnvBase):
         rng = torch.manual_seed(seed)
         self.rng = rng
 
-
-
 def make_composite_from_td(td):
     # custom funtion to convert a tensordict in a similar spec structure
     # of unbounded values.
@@ -307,12 +282,9 @@ def make_composite_from_td(td):
     return composite
 
 
-
 if __name__ == "__main__":
 
-
     env = QuantumEnv()
-
 
     # print("observation_spec:", env.observation_spec)
     # print("state_spec:", env.state_spec)
@@ -331,21 +303,22 @@ if __name__ == "__main__":
 
         def __init__(self):
             super(myNet, self).__init__()
+            ctype = torch.complex64
             self.net = nn.Sequential(
-                        nn.Linear(4, 64),
+                        nn.Linear(4, 64, dtype=ctype),
                         nn.Tanh(),
-                        nn.Linear(64, 32),
+                        nn.Linear(64, 32, dtype=ctype),
                         nn.Tanh(),
-                        nn.Linear(32, 16),
+                        nn.Linear(32, 16, dtype=ctype),
                         nn.Tanh(),
-                        nn.Linear(16, 1),
+                        nn.Linear(16, 1, dtype=ctype),
                         # nn.Tanh()
                         )
 
         def forward(self, x1, x2):
             # print(x1.shape, x2.shape)
-            flattened = torch.squeeze(torch.hstack((x1, x2)))
-            # print(flattened.shape)
+            # breakpoint()
+            flattened = 1.0j*torch.concatenate((x1.flatten(), x2.flatten()))
             return self.net(flattened)
 
     net = myNet().to(device)
@@ -357,7 +330,7 @@ if __name__ == "__main__":
     optim = torch.optim.Adam(policy.parameters(), lr=2e-3)
 
     # Train Parameters
-    batch_size = 200
+    batch_size = 50
     rollout_len = 3000
     total_trials = 200000
     pbar = tqdm.tqdm(range(total_trials // batch_size))

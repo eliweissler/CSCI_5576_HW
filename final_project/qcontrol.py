@@ -318,7 +318,8 @@ if __name__ == "__main__":
         def forward(self, x1, x2):
             # print(x1.shape, x2.shape)
             # breakpoint()
-            flattened = 1.0j*torch.concatenate((x1.flatten(), x2.flatten()))
+            # flattened = 1.0j*torch.concatenate((x1.flatten(), x2.flatten()))
+            flattened = torch.flatten(x1 + 1.0j*x2)
             return self.net(flattened)
 
     net = myNet().to(device)
@@ -331,7 +332,7 @@ if __name__ == "__main__":
 
     # Train Parameters
     batch_size = 50
-    rollout_len = 3000
+    rollout_len = 1000
     total_trials = 200000
     pbar = tqdm.tqdm(range(total_trials // batch_size))
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, total_trials)

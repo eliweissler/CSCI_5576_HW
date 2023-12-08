@@ -23,8 +23,9 @@ from torchrl.envs.utils import check_env_specs, step_mdp
 
 global device
 device = "cpu" if not torch.cuda.is_available() else "cuda:0"
-print("Using device", device)
 # device = "cpu"
+print("Using device", device)
+
 
 import matplotlib
 from matplotlib import pyplot as plt
@@ -112,14 +113,14 @@ class QuantumEnv(EnvBase):
                     {
                         "dt": kwargs.get("dt", 0.005),
                         "close_thresh": kwargs.get("close_thresh", 0.9999),
-                        "eps": kwargs.get("eps", 0.00001),
+                        "eps": kwargs.get("eps", 1e-10),
                         "control_penalty": kwargs.get("control_penalty", 20),
                         "control_thresh": kwargs.get("control_thresh", 0.1),
                         "gate_time": kwargs.get("gate_time", 10),
                         "psi_0": kwargs.get("psi_0", torch.tensor(np.array([0, 1]).reshape((2, 1)), dtype=ctype)),
                         "psi_f": kwargs.get("psi_f", torch.tensor(np.array([1, 0]).reshape((2, 1)), dtype=ctype)),
                         "H0": kwargs.get("H0", torch.tensor(np.array([[1,  0], [0, -1]]), dtype=ctype)),
-                        "H1": kwargs.get("H0", torch.tensor(np.array([[0,  1], [1, 0]]), dtype=ctype))
+                        "H1": kwargs.get("H1", torch.tensor(np.array([[0,  1], [1, 0]]), dtype=ctype))
                     },
                     [],
                 )
@@ -223,7 +224,7 @@ class QuantumEnv(EnvBase):
         # print("psi", psi)
         # print("PSI_F_tensor", PSI_F_tensor)
         # costs = 1 - torch.pow(torch.abs(torch.transpose(torch.conj_physical(PSI_F_tensor), 0, 1)@psi), 2)
-        bra_ket = torch.transpose(torch.conj_physical(psi_f), 0, 1)@psi
+        bra_ket = torch.sum(torch.conj_physical(psi_f)*psi, dim=[-2])
         F = torch.pow(torch.abs(bra_ket), 2).squeeze()
         # breakpoint()
 
@@ -237,13 +238,24 @@ class QuantumEnv(EnvBase):
         # terminate past the gate
         # Time and be more forgiving for being far away earlier
         # time_term = torch.pow(t, 2)
-
+        
+        # breakpoint()
         costs = -torch.log(F + eps) + control_term
         reward = -costs.view(*tensordict.shape, 1)
 
         # Propagate along the state
-        U = torch.linalg.matrix_exp(-1.0j*dt*(H0 + control*H1))
+        H_dim = H0.shape[-2]*H0.shape[-1]
+        control_reshape = control.repeat(1,H_dim,1).transpose(0,2).reshape(H0.shape)
+        dt_reshape = dt.repeat(1,H_dim,1).transpose(0,2).reshape(H0.shape)
+        # print(control_reshape)
+
+
+        U = torch.linalg.matrix_exp(-1.0j*dt_reshape*(H0 + control_reshape*H1))
         new_psi = U@psi
+
+        # breakpoint()
+
+        # print(torch.abs(new_psi[0]), new_psi[0], control[0])
 
         # Set done if you're under a threshold of closeness -- 99.9%
 
@@ -293,7 +305,7 @@ if __name__ == "__main__":
     # print(env.reset())    
 
     # Test the environment
-    check_env_specs(env)
+    # check_env_specs(env)
 
     # Make the network
     torch.manual_seed(0)
@@ -303,7 +315,7 @@ if __name__ == "__main__":
 
         def __init__(self):
             super(myNet, self).__init__()
-            ctype = torch.complex64
+            ctype = torch.float32
             self.net = nn.Sequential(
                         nn.Linear(4, 64, dtype=ctype),
                         nn.Tanh(),
@@ -317,9 +329,9 @@ if __name__ == "__main__":
 
         def forward(self, x1, x2):
             # print(x1.shape, x2.shape)
-            # breakpoint()
-            # flattened = 1.0j*torch.concatenate((x1.flatten(), x2.flatten()))
-            flattened = torch.flatten(x1 + 1.0j*x2)
+            # flattened = torch.concatenate((x1.flatten(), x2.flatten()))
+            # flattened = 1.0j*torch.hstack((x1, x2)).squeeze()
+            flattened = torch.hstack((x1, x2)).squeeze()
             return self.net(flattened)
 
     net = myNet().to(device)
@@ -331,9 +343,9 @@ if __name__ == "__main__":
     optim = torch.optim.Adam(policy.parameters(), lr=2e-3)
 
     # Train Parameters
-    batch_size = 50
-    rollout_len = 1000
-    total_trials = 200000
+    batch_size = 2
+    rollout_len = 1500
+    total_trials = 10000
     pbar = tqdm.tqdm(range(total_trials // batch_size))
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, total_trials)
     logs = defaultdict(list)
@@ -343,20 +355,21 @@ if __name__ == "__main__":
     dt = 0.005
     gate_time = 10
     control_thresh = 0.1
-    control_penalty = 0
-    psi_0 = np.array([1, 0]).reshape((2,1))
-    psi_f = np.array([0, 1]).reshape((2,1))
+    control_penalty = 1
+    np_ctype = np.complex64
+    psi_0 = np.array([1, 0]).reshape((2,1)).astype(np_ctype)
+    psi_f = np.array([0, 1]).reshape((2,1)).astype(np_ctype)
     H0 = np.array([[1,  0],
-                   [0, -1]])
+                   [0, -1]]).astype(np_ctype)
     H1 = np.array([[0,  1],
-                   [1,  0]])
+                   [1,  0]]).astype(np_ctype)
     params = env.gen_params(batch_size=[batch_size], dt=dt,
                             gate_time=gate_time, control_thresh=control_thresh,
                             control_penalty=control_penalty, psi_0=psi_0,
-                            psi_f=psi_f, H0=H0, H1=H1)   
+                            psi_f=psi_f, H0=H0, H1=H1)
 
     for _ in pbar:
-        init_td = env.reset()
+        init_td = env.reset(params)
         rollout = env.rollout(rollout_len, policy, tensordict=init_td, auto_reset=False)
         traj_return = rollout["next", "reward"].mean()
         (-traj_return).backward()
@@ -393,14 +406,16 @@ if __name__ == "__main__":
     timesteps = 2000
     tlist = np.arange(timesteps)*dt
 
-    def get_control_pulse(net, timesteps=timesteps, dt=dt):
-        psi = PSI_0_tensor
-        cntrl_seq = torch.zeros(timesteps)
+    def get_control_pulse(net, timesteps=timesteps, dt=dt, ctype=torch.complex64):
+        psi = torch.tensor(psi_0, dtype=ctype, device=device)
+        H0_tensor = torch.tensor(H0, dtype=ctype, device=device)
+        H1_tensor = torch.tensor(H1, dtype=ctype, device=device)
+        cntrl_seq = torch.zeros(timesteps, dtype=ctype)
         psi_list = []
         for i in range(timesteps):
             cntrl = net(torch.real(psi).reshape((1,2,1)), torch.imag(psi).reshape((1,2,1)))
             cntrl_seq[i] = cntrl
-            U = torch.linalg.matrix_exp(-1.0j*dt*(H0_tensor + cntrl*H1_tensor))
+            U = torch.linalg.matrix_exp(-1.0j*dt*(H0_tensor+cntrl*H1_tensor))
             psi = U@psi
             psi_list.append(psi.cpu().detach().numpy())
 
@@ -412,14 +427,14 @@ if __name__ == "__main__":
         tdiff = np.abs(tlist - t)
         return qt.Qobj(H0 + pulse[np.argmin(tdiff)]*H1)
 
-    states_qt = qt.sesolve(lambda t, args: Ham(t, tlist), qt.Qobj(PSI_0), tlist=tlist)
+    states_qt = qt.sesolve(lambda t, args: Ham(t, tlist), qt.Qobj(psi_0), tlist=tlist)
     prob0_qt = [np.abs(s[0][0][0])**2 for s in states_qt.states]
     prob0_prop = [np.abs(s[0])**2 for s in psi_list]
 
     f, ax = plt.subplots(ncols=2)
     ax[0].set_title("pulse")
     ax[1].set_title("population")
-    ax[0].plot(tlist, pulse)
+    ax[0].plot(tlist, np.abs(pulse))
     ax[1].plot(tlist, prob0_qt, label="qutip")
     ax[1].plot(tlist, prob0_prop, label="prop")
     ax[1].legend()

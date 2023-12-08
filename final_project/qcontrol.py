@@ -4,6 +4,7 @@ from typing import Optional
 import numpy as np
 import torch
 import tqdm
+import qutip as qt
 
 from tensordict.nn import TensorDictModule
 from tensordict.tensordict import TensorDict, TensorDictBase
@@ -78,29 +79,29 @@ class QuantumEnv(EnvBase):
         # Unpack the kwargs
         # global device
         # device = device_
-        global complex_type
-        complex_type = kwargs.get("complex_type", torch.complex64)
-        global PSI_0
-        PSI_0 = kwargs.get("PSI_0")
-        global PSI_0_tensor
-        PSI_0_tensor = torch.tensor(PSI_0, dtype=complex_type).to(device)
-        self.PSI_0_tensor = PSI_0_tensor
-        global PSI_F
-        PSI_F = kwargs.get("PSI_F")
-        global PSI_F_tensor
-        PSI_F_tensor = torch.tensor(PSI_F, dtype=complex_type).to(device)
-        global H0
-        H0 = kwargs.get("H0")
-        global H0_tensor
-        H0_tensor = torch.tensor(H0, dtype=complex_type).to(device)
-        global H1
-        H1 = kwargs.get("H1")
-        global H1_tensor
-        H1_tensor = torch.tensor(H1, dtype=complex_type).to(device)
+        # global complex_type
+        # complex_type = kwargs.get("complex_type", torch.complex64)
+        # global PSI_0
+        # PSI_0 = kwargs.get("PSI_0")
+        # global PSI_0_tensor
+        # PSI_0_tensor = torch.tensor(PSI_0, dtype=complex_type).to(device)
+        # self.PSI_0_tensor = PSI_0_tensor
+        # global PSI_F
+        # PSI_F = kwargs.get("PSI_F")
+        # global PSI_F_tensor
+        # PSI_F_tensor = torch.tensor(PSI_F, dtype=complex_type).to(device)
+        # global H0
+        # H0 = kwargs.get("H0")
+        # global H0_tensor
+        # H0_tensor = torch.tensor(H0, dtype=complex_type).to(device)
+        # global H1
+        # H1 = kwargs.get("H1")
+        # global H1_tensor
+        # H1_tensor = torch.tensor(H1, dtype=complex_type).to(device)
 
     # Helpers: _make_step and gen_params
     @staticmethod
-    def gen_params(dt=0.01, batch_size=None) -> TensorDictBase:
+    def gen_params(batch_size=None, **kwargs) -> TensorDictBase:
         """Returns a tensordict containing the physical parameters such as timestep and control stuff."""
         if batch_size is None:
             batch_size = []
@@ -108,7 +109,16 @@ class QuantumEnv(EnvBase):
             {
                 "params": TensorDict(
                     {
-                        "dt": dt
+                        "dt": kwargs.get("dt", 0.005),
+                        "close_thresh": kwargs.get("close_thresh", 0.9999),
+                        "eps": kwargs.get("eps", 0.00001),
+                        "control_penalty": kwargs.get("control_penalty", 20),
+                        "control_thresh": kwargs.get("control_thresh", 0.1),
+                        "gate_time": kwargs.get("gate_time", 10),
+                        "psi_0": kwargs.get("psi_0", np.array([0, 1]).reshape((2, 1))),
+                        "psi_f": kwargs.get("psi_f", np.array([1, 0]).reshape((2, 1))),
+                        "H0": kwargs.get("H0", np.array([[1,  0], [0, -1]])),
+                        "H1": kwargs.get("H0", np.array([[0,  1], [1, 0]]))
                     },
                     [],
                 )
@@ -210,15 +220,33 @@ class QuantumEnv(EnvBase):
 
         # Timestep
         dt = tensordict["params", "dt"]
+        # step = tensordict["params", "step"]
+        # t = dt*step
+        eps = tensordict["params", "eps"]
+        control_thresh = tensordict["params", "control_thresh"]
+        control_penalty = tensordict["params", "control_penalty"]
 
-        # Cost Function -- Fidelity with Final State
+        # Cost Function -- Log Infidelity with Final State 1 - F
         # print("psi", psi)
         # print("PSI_F_tensor", PSI_F_tensor)
-        costs = 1 - torch.pow(torch.abs(torch.transpose(torch.conj_physical(PSI_F_tensor), 0, 1)@psi), 2)
+        # costs = 1 - torch.pow(torch.abs(torch.transpose(torch.conj_physical(PSI_F_tensor), 0, 1)@psi), 2)
+        F = torch.pow(torch.abs(torch.transpose(torch.conj_physical(PSI_F_tensor), 0, 1)@psi), 2).squeeze()
+        # breakpoint()
+        
+
+        # If you're super close to the state STOP
+        done = F >= tensordict["params", "close_thresh"]
+
         # Add penalty for large control
-        max_val = 0.1
-        multiplier = 1
-        costs += multiplier*torch.clamp(torch.abs(control) - max_val, min=0).reshape(costs.shape)
+        control_term = control_penalty*torch.clamp(torch.pow(control,2) - control_thresh, min=0).squeeze()
+
+        # Maybe add some sort of target gate time and give a penalty, terminate past the gate
+        # Time and be more forgiving for being far away earlier
+        # time_term = torch.pow(t, 2)
+
+
+        costs = -torch.log(F + eps) + control_term
+        reward = -costs.view(*tensordict.shape, 1)
 
         # Propagate along the state
         # print("H0", H0_tensor)
@@ -240,8 +268,9 @@ class QuantumEnv(EnvBase):
         # print("U", U)
         new_psi = U@psi
 
-        reward = -costs.view(*tensordict.shape, 1)
-        done = torch.zeros_like(reward, dtype=torch.bool, device=device)
+        # Set done if you're under a threshold of closeness -- 99.9%
+
+        # done = torch.zeros_like(reward, dtype=torch.bool, device=device)
         out = TensorDict(
             {
                 "psi_real": torch.real(new_psi),
@@ -249,6 +278,7 @@ class QuantumEnv(EnvBase):
                 "params": tensordict["params"],
                 "reward": reward,
                 "done": done,
+                # "step": tensordict["step"] + 1,
             },
             tensordict.shape,
         )
@@ -280,15 +310,8 @@ def make_composite_from_td(td):
 
 if __name__ == "__main__":
 
-    PSI_0 = np.array([1, 0]).reshape((2,1))
-    PSI_F = np.array([0, 1]).reshape((2,1))
 
-    H0 = np.array([[1,  0],
-                   [0, -1]])
-    H1 = np.array([[0,  1],
-                   [1,  0]])
-
-    env = QuantumEnv(PSI_0=PSI_0, PSI_F=PSI_F, H0=H0, H1=H1)
+    env = QuantumEnv()
 
 
     # print("observation_spec:", env.observation_spec)
@@ -311,12 +334,12 @@ if __name__ == "__main__":
             self.net = nn.Sequential(
                         nn.Linear(4, 64),
                         nn.Tanh(),
-                        nn.Linear(64, 64),
+                        nn.Linear(64, 32),
                         nn.Tanh(),
-                        nn.Linear(64, 64),
+                        nn.Linear(32, 16),
                         nn.Tanh(),
-                        nn.Linear(64, 1),
-                        nn.Tanh()
+                        nn.Linear(16, 1),
+                        # nn.Tanh()
                         )
 
         def forward(self, x1, x2):
@@ -329,19 +352,37 @@ if __name__ == "__main__":
     policy = TensorDictModule(
         net,
         in_keys=["psi_real", "psi_imag"],
-        out_keys=["action"],
+        out_keys=["action"]
     )
-    optim = torch.optim.Adam(policy.parameters(), lr=1e-3)
+    optim = torch.optim.Adam(policy.parameters(), lr=2e-3)
 
-    # Train
-    batch_size = 1000
-    rollout_len = 1000
-    pbar = tqdm.tqdm(range(20_000 // batch_size))
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, 20_000)
+    # Train Parameters
+    batch_size = 200
+    rollout_len = 3000
+    total_trials = 200000
+    pbar = tqdm.tqdm(range(total_trials // batch_size))
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, total_trials)
     logs = defaultdict(list)
 
+
+    # System Parameters
+    dt = 0.005
+    gate_time = 10
+    control_thresh = 0.1
+    control_penalty = 0
+    psi_0 = np.array([1, 0]).reshape((2,1))
+    psi_f = np.array([0, 1]).reshape((2,1))
+    H0 = np.array([[1,  0],
+                   [0, -1]])
+    H1 = np.array([[0,  1],
+                   [1,  0]])
+    params = env.gen_params(batch_size=[batch_size], dt=dt,
+                            gate_time=gate_time, control_thresh=control_thresh,
+                            control_penalty=control_penalty, psi_0=psi_0,
+                            psi_f=psi_f, H0=H0, H1=H1)   
+
     for _ in pbar:
-        init_td = env.reset(env.gen_params(batch_size=[batch_size]))
+        init_td = env.reset()
         rollout = env.rollout(rollout_len, policy, tensordict=init_td, auto_reset=False)
         traj_return = rollout["next", "reward"].mean()
         (-traj_return).backward()
@@ -370,6 +411,42 @@ if __name__ == "__main__":
             if is_ipython:
                 display.display(plt.gcf())
                 display.clear_output(wait=True)
-            plt.show()
+            plt.savefig("training.png")
 
     plot()
+
+    dt = 0.005
+    timesteps = 2000
+    tlist = np.arange(timesteps)*dt
+
+    def get_control_pulse(net, timesteps=timesteps, dt=dt):
+        psi = PSI_0_tensor
+        cntrl_seq = torch.zeros(timesteps)
+        psi_list = []
+        for i in range(timesteps):
+            cntrl = net(torch.real(psi).reshape((1,2,1)), torch.imag(psi).reshape((1,2,1)))
+            cntrl_seq[i] = cntrl
+            U = torch.linalg.matrix_exp(-1.0j*dt*(H0_tensor + cntrl*H1_tensor))
+            psi = U@psi
+            psi_list.append(psi.cpu().detach().numpy())
+
+        return cntrl_seq.cpu().detach().numpy(), psi_list
+
+    pulse, psi_list = get_control_pulse(net)
+
+    def Ham(t, tlist):
+        tdiff = np.abs(tlist - t)
+        return qt.Qobj(H0 + pulse[np.argmin(tdiff)]*H1)
+
+    states_qt = qt.sesolve(lambda t, args: Ham(t, tlist), qt.Qobj(PSI_0), tlist=tlist)
+    prob0_qt = [np.abs(s[0][0][0])**2 for s in states_qt.states]
+    prob0_prop = [np.abs(s[0])**2 for s in psi_list]
+
+    f, ax = plt.subplots(ncols=2)
+    ax[0].set_title("pulse")
+    ax[1].set_title("population")
+    ax[0].plot(tlist, pulse)
+    ax[1].plot(tlist, prob0_qt, label="qutip")
+    ax[1].plot(tlist, prob0_prop, label="prop")
+    ax[1].legend()
+    plt.savefig("pulse.png")

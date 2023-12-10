@@ -163,8 +163,8 @@ class QuantumEnv(EnvBase):
         # action-spec will be automatically wrapped in input_spec when
         # `self.action_spec = spec` will be called supported
         self.action_spec = BoundedTensorSpec(
-            low=-1,
-            high=1,
+            low=-td_params["params", "control_thresh"],
+            high=td_params["params", "control_thresh"],
             shape=(1,),
             dtype=torch.float32,
             device=device
@@ -183,8 +183,16 @@ class QuantumEnv(EnvBase):
         # else:
         #     psi_real = psi_real.repeat(tensordict.size(dim=0), 1, 1)
         #     psi_imag = psi_imag.repeat(tensordict.size(dim=0), 1, 1)
-        psi_real = torch.real(tensordict["params", "psi_0"])
-        psi_imag = torch.imag(tensordict["params", "psi_0"])
+
+        psi_0 = tensordict["params", "psi_0"]
+        # psi_0 = torch.rand(tensordict["params", "psi_0"].shape,
+        # device=device,
+        #                    dtype=torch.complex64)
+        # psi_0 /= torch.norm(psi_0)
+        # print(psi_0, torch.norm(psi_0))
+
+        psi_real = torch.real(psi_0)
+        psi_imag = torch.imag(psi_0)
 
         out = TensorDict(
             {
@@ -207,6 +215,7 @@ class QuantumEnv(EnvBase):
         psi_real, psi_imag, control = tensordict["psi_real"], tensordict["psi_imag"], tensordict["action"].squeeze(-1)
         psi = psi_real + 1.0j*psi_imag
 
+
         # Target final states and Hamiltonians
         psi_f = tensordict["params", "psi_f"]
         H0 = tensordict["params", "H0"]
@@ -220,19 +229,24 @@ class QuantumEnv(EnvBase):
         control_thresh = tensordict["params", "control_thresh"]
         control_penalty = tensordict["params", "control_penalty"]
 
+        
+        # Clip control
+        # control = torch.clamp(control, min=-control_thresh, max=control_thresh)
+
         # Cost Function -- Log Infidelity with Final State 1 - F
         # print("psi", psi)
         # print("PSI_F_tensor", PSI_F_tensor)
         # costs = 1 - torch.pow(torch.abs(torch.transpose(torch.conj_physical(PSI_F_tensor), 0, 1)@psi), 2)
         bra_ket = torch.sum(torch.conj_physical(psi_f)*psi, dim=[-2])
-        F = torch.pow(torch.abs(bra_ket), 2).squeeze()
-        # breakpoint()
+        F = torch.mean(torch.pow(torch.abs(bra_ket), 2).squeeze(),dim=-1)
 
         # If you're super close to the state STOP
         done = F >= tensordict["params", "close_thresh"]
 
         # Add penalty for large control
-        control_term = control_penalty*torch.clamp(torch.pow(torch.abs(control), 2) - control_thresh, min=0).squeeze()
+        # control_cost = control_penalty*(torch.clamp(torch.abs(control), min=control_thresh).squeeze() - control_thresh)
+        control_cost = control_penalty*torch.pow(control, 2)
+        # control_cost = control_penalty*torch.clamp(torch.abs(control) - control_thresh, min=0)
 
         # Maybe add some sort of target gate time and give a penalty,
         # terminate past the gate
@@ -240,14 +254,14 @@ class QuantumEnv(EnvBase):
         # time_term = torch.pow(t, 2)
         
         # breakpoint()
-        costs = -torch.log(F + eps) + control_term
+        costs = -torch.log(F + eps) + control_cost
         reward = -costs.view(*tensordict.shape, 1)
 
         # Propagate along the state
         H_dim = H0.shape[-2]*H0.shape[-1]
         control_reshape = control.repeat(1,H_dim,1).transpose(0,2).reshape(H0.shape)
         dt_reshape = dt.repeat(1,H_dim,1).transpose(0,2).reshape(H0.shape)
-        # print(control_reshape)
+        # print(control)
 
 
         U = torch.linalg.matrix_exp(-1.0j*dt_reshape*(H0 + control_reshape*H1))
@@ -296,6 +310,25 @@ def make_composite_from_td(td):
 
 if __name__ == "__main__":
 
+    
+    # System Parameters
+    dt = 0.005
+    gate_time = 10
+    control_thresh = 1
+    control_penalty = 2
+    close_thresh = 0.99999
+    np_ctype = np.complex64
+    # psi_0 = np.array([1, 0]).reshape((2,1)).astype(np_ctype)
+    # psi_f = np.array([0, 1]).reshape((2,1)).astype(np_ctype)
+    psi_0 = np.array([[1,  0],
+                      [0,  1]]).astype(np_ctype)
+    psi_f = np.array([[0,  1],
+                      [1,  0]]).astype(np_ctype)
+    H0 = np.array([[1,  0],
+                   [0, -1]]).astype(np_ctype)
+    H1 = np.array([[0,  1],
+                   [1,  0]]).astype(np_ctype)
+
     env = QuantumEnv()
 
     # print("observation_spec:", env.observation_spec)
@@ -316,14 +349,19 @@ if __name__ == "__main__":
         def __init__(self):
             super(myNet, self).__init__()
             ctype = torch.float32
+            p_drop = 0.01
+            bias = True
             self.net = nn.Sequential(
-                        nn.Linear(4, 64, dtype=ctype),
+                        nn.Linear(2*psi_0.size, 64, dtype=ctype, bias=bias),
                         nn.Tanh(),
-                        nn.Linear(64, 32, dtype=ctype),
+                        # nn.Dropout(p=p_drop),
+                        nn.Linear(64, 64, dtype=ctype, bias=bias),
                         nn.Tanh(),
-                        nn.Linear(32, 16, dtype=ctype),
+                        nn.Dropout(p=p_drop),
+                        nn.Linear(64, 16, dtype=ctype, bias=bias),
                         nn.Tanh(),
-                        nn.Linear(16, 1, dtype=ctype),
+                        nn.Dropout(p=p_drop),
+                        nn.Linear(16, 1, dtype=ctype, bias=bias),
                         # nn.Tanh()
                         )
 
@@ -331,8 +369,32 @@ if __name__ == "__main__":
             # print(x1.shape, x2.shape)
             # flattened = torch.concatenate((x1.flatten(), x2.flatten()))
             # flattened = 1.0j*torch.hstack((x1, x2)).squeeze()
-            flattened = torch.hstack((x1, x2)).squeeze()
+            
+            flattened = torch.hstack((x1.flatten(1, -1), x2.flatten(1, -1)))
+            # ctype = torch.float32
+            # self.net = nn.Sequential(
+            #             nn.Linear(4, 64, dtype=ctype),
+            #             nn.Tanh(),
+            #             nn.Linear(64, 32, dtype=ctype),
+            #             nn.Tanh(),
+            #             nn.Linear(32, 16, dtype=ctype),
+            #             nn.Tanh(),
+            #             nn.Linear(16, 1, dtype=ctype),
+            #             # nn.Tanh()
+            #             )
+            # x = torch.hstack((x1, x2)).squeeze()
+            # x = nn.Linear(4, 64, dtype=ctype)(x)
+            # x = nn.Tanh(x)
+            # x = torch.clamp(self.net(flattened), min=-control_thresh, max=control_thresh)
             return self.net(flattened)
+        # @staticmethod
+        # def dropout_complex(x):
+        #     # work around unimplemented dropout for complex
+        #     if x.is_complex():
+        #         mask = torch.nn.functional.dropout(torch.ones_like(x.real))
+        #         return x * mask
+        #     else:
+        #         return torch.nn.functional.dropout(x)
 
     net = myNet().to(device)
     policy = TensorDictModule(
@@ -343,30 +405,19 @@ if __name__ == "__main__":
     optim = torch.optim.Adam(policy.parameters(), lr=2e-3)
 
     # Train Parameters
-    batch_size = 2
+    batch_size = 100
     rollout_len = 1500
     total_trials = 10000
     pbar = tqdm.tqdm(range(total_trials // batch_size))
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, total_trials)
+    # scheduler = torch.optim.lr_scheduler.LinearLR(optim, total_iters=total_trials)
     logs = defaultdict(list)
 
 
-    # System Parameters
-    dt = 0.005
-    gate_time = 10
-    control_thresh = 0.1
-    control_penalty = 1
-    np_ctype = np.complex64
-    psi_0 = np.array([1, 0]).reshape((2,1)).astype(np_ctype)
-    psi_f = np.array([0, 1]).reshape((2,1)).astype(np_ctype)
-    H0 = np.array([[1,  0],
-                   [0, -1]]).astype(np_ctype)
-    H1 = np.array([[0,  1],
-                   [1,  0]]).astype(np_ctype)
     params = env.gen_params(batch_size=[batch_size], dt=dt,
                             gate_time=gate_time, control_thresh=control_thresh,
                             control_penalty=control_penalty, psi_0=psi_0,
-                            psi_f=psi_f, H0=H0, H1=H1)
+                            psi_f=psi_f, H0=H0, H1=H1, close_thresh=close_thresh)
 
     for _ in pbar:
         init_td = env.reset(params)
@@ -403,17 +454,18 @@ if __name__ == "__main__":
     plot()
 
     dt = 0.005
-    timesteps = 2000
+    timesteps = 1500
     tlist = np.arange(timesteps)*dt
 
     def get_control_pulse(net, timesteps=timesteps, dt=dt, ctype=torch.complex64):
+        net.eval()
         psi = torch.tensor(psi_0, dtype=ctype, device=device)
         H0_tensor = torch.tensor(H0, dtype=ctype, device=device)
         H1_tensor = torch.tensor(H1, dtype=ctype, device=device)
         cntrl_seq = torch.zeros(timesteps, dtype=ctype)
         psi_list = []
         for i in range(timesteps):
-            cntrl = net(torch.real(psi).reshape((1,2,1)), torch.imag(psi).reshape((1,2,1)))
+            cntrl = net(torch.real(psi).reshape((1,4,1)), torch.imag(psi).reshape((1,4,1)))
             cntrl_seq[i] = cntrl
             U = torch.linalg.matrix_exp(-1.0j*dt*(H0_tensor+cntrl*H1_tensor))
             psi = U@psi
@@ -429,13 +481,15 @@ if __name__ == "__main__":
 
     states_qt = qt.sesolve(lambda t, args: Ham(t, tlist), qt.Qobj(psi_0), tlist=tlist)
     prob0_qt = [np.abs(s[0][0][0])**2 for s in states_qt.states]
-    prob0_prop = [np.abs(s[0])**2 for s in psi_list]
+    prob0_prop = [np.abs(s[:,1])**2 for s in psi_list]
+    prob1_prop = [np.abs(s[:,0])**2 for s in psi_list]
 
     f, ax = plt.subplots(ncols=2)
     ax[0].set_title("pulse")
     ax[1].set_title("population")
-    ax[0].plot(tlist, np.abs(pulse))
+    ax[0].plot(tlist, pulse)
     ax[1].plot(tlist, prob0_qt, label="qutip")
-    ax[1].plot(tlist, prob0_prop, label="prop")
+    ax[1].plot(tlist, prob0_prop, label="prop_0")
+    ax[1].plot(tlist, prob1_prop, label="prop_1")
     ax[1].legend()
     plt.savefig("pulse.png")

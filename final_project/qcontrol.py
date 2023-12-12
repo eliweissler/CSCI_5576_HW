@@ -310,26 +310,25 @@ def make_composite_from_td(td):
 
 if __name__ == "__main__":
 
-    
-    # System Parameters
     dt = 0.005
     gate_time = 10
     control_thresh = 1
     control_penalty = 2
     close_thresh = 0.99999
+
     np_ctype = np.complex64
-    # psi_0 = np.array([1, 0]).reshape((2,1)).astype(np_ctype)
-    # psi_f = np.array([0, 1]).reshape((2,1)).astype(np_ctype)
     psi_0 = np.array([[1,  0],
-                      [0,  1]]).astype(np_ctype)
+                        [0,  1]]).astype(np_ctype)
     psi_f = np.array([[0,  1],
-                      [1,  0]]).astype(np_ctype)
+                        [1,  0]]).astype(np_ctype)
     H0 = np.array([[1,  0],
-                   [0, -1]]).astype(np_ctype)
+                    [0, -1]]).astype(np_ctype)
     H1 = np.array([[0,  1],
-                   [1,  0]]).astype(np_ctype)
+                [1,  0]]).astype(np_ctype)
+
 
     env = QuantumEnv()
+    check_env_specs(env)
 
     # print("observation_spec:", env.observation_spec)
     # print("state_spec:", env.state_spec)
@@ -338,7 +337,6 @@ if __name__ == "__main__":
     # print(env.reset())    
 
     # Test the environment
-    # check_env_specs(env)
 
     # Make the network
     torch.manual_seed(0)

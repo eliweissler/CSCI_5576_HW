@@ -481,15 +481,16 @@ if __name__ == "__main__":
 
     states_qt = qt.sesolve(lambda t, args: Ham(t, tlist), qt.Qobj(psi_0), tlist=tlist)
     prob0_qt = [np.abs(s[0][0][0])**2 for s in states_qt.states]
-    prob0_prop = [np.abs(s[:,1])**2 for s in psi_list]
-    prob1_prop = [np.abs(s[:,0])**2 for s in psi_list]
+
+    prob0_start0 = [np.abs(s[0,0])**2 for s in psi_list]
+    prob0_start1 = [np.abs(s[0,1])**2 for s in psi_list]
 
     f, ax = plt.subplots(ncols=2)
     ax[0].set_title("pulse")
-    ax[1].set_title("population")
+    ax[1].set_title("population in [1,0] state")
     ax[0].plot(tlist, pulse)
-    ax[1].plot(tlist, prob0_qt, label="qutip")
-    ax[1].plot(tlist, prob0_prop, label="prop_0")
-    ax[1].plot(tlist, prob1_prop, label="prop_1")
+    # ax[1].plot(tlist, prob0_qt, label="qutip")
+    ax[1].plot(tlist, prob0_start0, label="starts in [1,0]")
+    ax[1].plot(tlist, prob0_start1, label="starts in [0,1]")
     ax[1].legend()
     plt.savefig("pulse.png")

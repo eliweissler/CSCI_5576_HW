@@ -209,7 +209,7 @@ class QuantumEnv(EnvBase):
         )
 
         return out
-    
+
     @staticmethod
     def avg_fidelity(psi_f, psi):
         """
@@ -259,37 +259,21 @@ class QuantumEnv(EnvBase):
 
         # Timestep and other parameters
         dt = tensordict["params", "dt"]
-        # step = tensordict["params", "step"]
-        # t = dt*step
         eps = tensordict["params", "eps"]
-        # control_thresh = tensordict["params", "control_thresh"]
         control_penalty = tensordict["params", "control_penalty"]
 
         
-        # Clip control
-        # control = torch.clamp(control, min=-control_thresh, max=control_thresh)
-
-        # Cost Function -- Log Infidelity with Final State 1 - F
-        # print("psi", psi)
-        # print("PSI_F_tensor", PSI_F_tensor)
-        # costs = 1 - torch.pow(torch.abs(torch.transpose(torch.conj_physical(PSI_F_tensor), 0, 1)@psi), 2)
-        # bra_ket = torch.sum(torch.conj_physical(psi_f)*psi, dim=[-2])
-        # F = torch.mean(torch.pow(torch.abs(bra_ket), 2).squeeze(),dim=-1)
-
         F = QuantumEnv.avg_fidelity(psi_f, psi)
 
         # If you're super close to the state STOP
         done = F >= tensordict["params", "close_thresh"]
 
         # Add penalty for large control
-        # control_time_env = 1 - torch.exp(-torch.pow((0.5-t_left)/0.2, 2))
         control_time_env = 1
         control_cost = control_time_env*control_penalty*torch.pow(control, 2)
 
-        # Maybe add some sort of target gate time and give a penalty,
-        # terminate past the gate
-        # Time and be more forgiving for being far away earlier
-        # time_term = torch.pow(t, 2)
+        # target gate time apenalty, more forgiving
+        # the earlier in the pulse you are
         costs = -torch.pow((1-t_left), 2)*torch.log(F + eps) + control_cost
         reward = -costs.view(*tensordict.shape, 1)
 
@@ -298,7 +282,7 @@ class QuantumEnv(EnvBase):
         control_reshape = control.repeat(1, H_dim, 1).transpose(0, 2).reshape(H0.shape)
         dt_reshape = dt.repeat(1, H_dim, 1).transpose(0, 2).reshape(H0.shape)
 
-
+        # U is the unitary time evolution operator
         U = torch.linalg.matrix_exp(-1.0j*dt_reshape*(H0 + control_reshape*H1))
         new_psi = U@psi
 
@@ -324,6 +308,7 @@ class QuantumEnv(EnvBase):
         """
         rng = torch.manual_seed(seed)
         self.rng = rng
+
 
 def make_composite_from_td(td):
     """
